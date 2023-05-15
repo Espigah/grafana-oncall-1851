@@ -1,0 +1,10 @@
+groups:
+- name: meta
+  rules:
+  - alert: heartbeat
+    expr:  vector(1)
+    labels:
+      severity: none
+    annotations:
+      description: This is heartbeat alert
+      summary:  Alerting Amixr

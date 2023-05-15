@@ -1,0 +1,18 @@
+groups:
+- name: meta
+  rules:
+  - alert: alert test  para o time a
+    expr:  vector(1)
+    labels:
+      severity: a
+      namespace: TeamA
+    annotations:
+      description: Alert test A description
+
+  - alert: alert test para o time b
+    expr:  vector(1)
+    labels:
+      severity: b
+      team: TeamB
+    annotations:
+      description: Alert test B description  

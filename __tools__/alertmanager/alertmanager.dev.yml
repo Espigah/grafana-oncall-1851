@@ -1,0 +1,31 @@
+global:
+  resolve_timeout: 15m
+
+templates:
+  - '/etc/alertmanager/templates/**/*.tmpl'
+
+route:
+  receiver: 'grafana_oncall'
+  group_by: ['namespace', 'alertname', 'application']
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 20s
+  routes:
+    - receiver: 'amixr-heartbeat'
+      group_wait: 0s
+      group_interval: 30s
+      repeat_interval: 20s
+      matchers:
+        - alertname="heartbeat"
+
+
+receivers:
+- name: 'grafana_oncall'
+  webhook_configs:
+  - url: http://engine:8080/integrations/v1/alertmanager/4lR7i7y9LyKP9QzrucVJ5oxD3/
+    send_resolved: true
+
+- name: 'amixr-heartbeat'
+  webhook_configs:
+  - url: http://engine:8080/integrations/v1/alertmanager/4lR7i7y9LyKP9QzrucVJ5oxD3/heartbeat/
+    send_resolved: false

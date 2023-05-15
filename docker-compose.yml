@@ -1,0 +1,235 @@
+version: "3.9"
+
+
+services:
+  engine:
+    build: 
+      context: ./docker
+      dockerfile: Dockerfile
+      target: engine
+    ports:
+      - "8080:8080"
+    networks:
+      - oncall    
+    env_file:
+      - ./envs/.env.shared
+      - ./envs/.engine.env
+    volumes:
+      - oncall_data:/var/lib/oncall
+    depends_on:
+      oncall_db_migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+  celery:
+    build: 
+      context: ./docker
+      dockerfile: Dockerfile
+      target: celery
+    networks:
+      - oncall  
+    env_file:
+      - ./envs/.env.shared
+      - ./envs/.celery.env
+    volumes:
+      - oncall_data:/var/lib/oncall
+    depends_on:
+      oncall_db_migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  celery-ui:
+    image: mher/flower:1.2.0
+    command: celery flower --loglevel=DEBUG --port=5555
+    ports:
+      - "5555:5555"
+    env_file:
+      - ./envs/.env.shared
+      - ./envs/.flower.env
+    networks:
+      - oncall
+    depends_on:
+      - celery
+
+  oncall_db_migration:
+    build: 
+      context: ./docker
+      dockerfile: Dockerfile
+      target: migrate
+    networks:
+      - oncall
+    env_file:
+      - ./envs/.env.shared
+      - ./envs/.engine.env
+    volumes:
+      - oncall_data:/var/lib/oncall
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+
+  redis:
+    image: redis:7.0.5
+    expose:
+      - 6379
+    networks:
+      - oncall
+    volumes:
+      - redis_data:/data
+    env_file:
+      - ./envs/.redis.env
+    deploy:
+      resources:
+        limits:
+          memory: 500m
+          cpus: "0.5"
+    #command: ["redis-server" ,"--appendonly","yes","--requirepass", "${REDIS_PASSWORD}"]
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      timeout: 5s
+      interval: 5s
+      retries: 10
+
+  redis-ui:
+      image: patrikx3/p3x-redis-ui
+      container_name: p3x-redis-ui
+      ports:
+        - 7843:7843
+      volumes:
+        - "./__tools__/p3x-redis-ui:/settings"
+      networks:
+        - oncall
+      depends_on:
+            redis:
+              condition: service_healthy
+
+      
+  postgres:
+    container_name: postgres
+    image: postgres:14.4
+    restart: always
+    env_file:
+      - ./envs/.env.shared
+      - ./envs/.postgres.env
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgresdata_dev:/var/lib/postgresql/data
+    networks:
+      - oncall
+
+  # grafana-new:
+  #   image: "grafana/grafana:${GRAFANA_VERSION:-latest}"
+  #   ports:
+  #     - "3001:3000"
+  #   networks:
+  #     - oncall
+  #   environment:
+  #     GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+  #     GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+  #     GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: grafana-oncall-app
+  #     GF_INSTALL_PLUGINS: grafana-oncall-app
+  #   volumes:
+  #     - grafana_data:/var/lib/grafana
+  #     - ./__tools__/grafana/provisioning/dashboards:/var/lib/grafana/dashboards
+  #     - ./__tools__/grafana/provisioning/:/etc/grafana/provisioning/
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 500m
+  #         cpus: "0.5"
+  #   profiles:
+  #     - with_grafana
+
+
+  grafana:
+    image: "grafana/grafana:9.4.7"
+    ports:
+      - "3000:3000"
+    networks:
+      - oncall
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      #GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: grafana-oncall-app
+      GF_INSTALL_PLUGINS: grafana-oncall-app vv1.2.16
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      GF_ALERTING_ENABLED: 'true'
+      GF_UNIFIED_ALERTING_ENABLED: 'false'
+      GF_FORCE_MIGRATE: 'true'
+      GF_ALERTING_NOTIFICATION_DEFAULT_NAME: alertmanager
+      GF_ALERTING_NOTIFICATION_DEFAULT_TYPE: prometheus-alertmanager
+      GF_ALERTING_NOTIFICATION_DEFAULT_SETTINGS: "{\"url\":\"http://localhost:9093/api/v1/alerts\"}"
+
+    volumes:
+      - grafana_legacy_data:/var/lib/grafana
+      - ./__tools__/grafana/provisioning/dashboards:/var/lib/grafana/dashboards:rw
+      - ./__tools__/grafana/provisioning/:/etc/grafana/provisioning/:rw
+      - ./__tools__/grafana/plugins:/var/lib/grafana/plugins:rw
+    deploy:
+      resources:
+        limits:
+          memory: 500m
+          cpus: "0.5"
+    
+
+  prometheus:
+    image: prom/prometheus:v2.15.2
+    ports:
+      - "9090:9090"
+    volumes:
+      - type: bind
+        source: ./__tools__/prometheus/prometheus.dev.yml
+        target: /etc/prometheus/prometheus.yml
+        read_only: true
+      - type: bind
+        source: ./__tools__/prometheus/heartbeat.rule.yml
+        target: /etc/prometheus/rules.d/heartbeat.rule.yml
+        read_only: true
+      - type: bind
+        source: ./__tools__/prometheus/alert.rule.yml
+        target: /etc/prometheus/rules.d/alert.rule.yml
+        read_only: true
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - oncall
+
+  alertmanager:
+    image: prom/alertmanager:v0.24.0
+    ports:
+      - "9093:9093"
+    volumes:
+      - type: bind
+        source: ./__tools__/alertmanager/alertmanager.dev.yml
+        target: /etc/alertmanager/alertmanager.yml
+        read_only: true
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--log.level=debug'
+    networks:
+      - oncall
+
+volumes:
+  grafana_data:
+  grafana_legacy_data:
+  oncall_data:
+  redis_data:
+  postgresdata_dev:
+
+
+networks:
+  oncall:
+    driver: bridge

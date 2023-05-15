@@ -1,0 +1,7 @@
+.vscode
+.lh
+iac
+__tools__/grafana/plugins/*
+.terraform
+.terraform.lock.hcl
+terraform.tfstate
